@@ -59,6 +59,8 @@ func runServer() {
 	apiKey, _ := session.GenerateAPIKey()
 	ks := session.MapKeyStore{apiKey.ID: apiKey.Secret}
 
+	log := server.NewLogger("crud")
+
 	cert, err := tls.LoadX509KeyPair("../../test-cert.pem", "../../test-key.pem")
 	if err != nil {
 		log.Fatalf("load cert: %v", err)
@@ -66,7 +68,7 @@ func runServer() {
 
 	srv, err := server.NewServer(ks,
 		server.WithTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}}),
-		server.WithLogger(server.NewLogger("crud")),
+		server.WithLogger(log),
 	)
 	if err != nil {
 		log.Fatalf("create server: %v", err)
@@ -173,19 +175,18 @@ func runServer() {
 	conn, _ := net.ListenUDP("udp", addr)
 	hushPort := conn.LocalAddr().(*net.UDPAddr).Port
 
-	fmt.Printf("╔════════════════════════════════════╗\n")
-	fmt.Printf("║     Hush CRUD Notes Example       ║\n")
-	fmt.Printf("╚════════════════════════════════════╝\n")
-	fmt.Printf("Key ID:     %s\n", apiKey.ID)
-	fmt.Printf("Key Secret: %x\n", apiKey.Secret)
-	fmt.Printf("Hush Port:  %d\n\n", hushPort)
-	fmt.Println("Ops:")
-	fmt.Println("  0x0001  Create(text)     → id")
-	fmt.Println("  0x0002  List()           → notes[]")
-	fmt.Println("  0x0003  Get(id)          → note")
-	fmt.Println("  0x0004  Update(id, text) → ok")
-	fmt.Println("  0x0005  Delete(id)       → ok")
-	fmt.Println()
+	log.Printf("[INF] Hush CRUD Notes ready on port %d", hushPort)
+	log.Printf("[INF] Hush CRUD Notes ready on port %d", hushPort)
+	log.Printf("[INF] Hush CRUD Notes ready on port %d", hushPort)
+	fmt.Printf("Key ID:       %s\n", apiKey.ID)
+	fmt.Printf("Key Secret:   %x\n", apiKey.Secret)
+	fmt.Printf("Port:         %d\n", hushPort)
+	fmt.Printf("Ops:\n")
+	fmt.Printf("  0x0001  Create(text)     → id\n")
+	fmt.Printf("  0x0002  List()           → notes[]\n")
+	fmt.Printf("  0x0003  Get(id)          → note\n")
+	fmt.Printf("  0x0004  Update(id, text) → ok\n")
+	fmt.Printf("  0x0005  Delete(id)       → ok\n\n")
 
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
 	if err := srv.ListenAndServeOnConn(ctx, conn); err != nil {

@@ -53,6 +53,8 @@ func runServer() {
 	apiKey, _ := session.GenerateAPIKey()
 	ks := session.MapKeyStore{apiKey.ID: apiKey.Secret}
 
+	log := server.NewLogger("chat")
+
 	cert, err := tls.LoadX509KeyPair("../../test-cert.pem", "../../test-key.pem")
 	if err != nil {
 		log.Fatalf("load cert: %v", err)
@@ -60,7 +62,7 @@ func runServer() {
 
 	srv, err := server.NewServer(ks,
 		server.WithTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}}),
-		server.WithLogger(server.NewLogger("chat")),
+		server.WithLogger(log),
 	)
 	if err != nil {
 		log.Fatalf("create server: %v", err)
@@ -91,13 +93,11 @@ func runServer() {
 	conn, _ := net.ListenUDP("udp", addr)
 	hushPort := conn.LocalAddr().(*net.UDPAddr).Port
 
-	fmt.Printf("╔════════════════════════════════════╗\n")
-	fmt.Printf("║     Hush Chat Example              ║\n")
-	fmt.Printf("╚════════════════════════════════════╝\n")
-	fmt.Printf("Key ID:     %s\n", apiKey.ID)
-	fmt.Printf("Key Secret: %x\n", apiKey.Secret)
-	fmt.Printf("Hush Port:  %d\n\n", hushPort)
-	fmt.Printf("Join: go run . client %s %x %s <nick>\n", apiKey.ID, apiKey.Secret, fmt.Sprint(hushPort))
+	log.Printf("[INF] Hush Chat ready on port %d", hushPort)
+	fmt.Printf("Key ID:       %s\n", apiKey.ID)
+	fmt.Printf("Key Secret:   %x\n", apiKey.Secret)
+	fmt.Printf("Port:         %d\n", hushPort)
+	fmt.Printf("Join:         go run . client %s %x %d <nick>\n\n", apiKey.ID, apiKey.Secret, hushPort)
 
 	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
 	if err := srv.ListenAndServeOnConn(ctx, conn); err != nil {

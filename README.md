@@ -46,18 +46,16 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
 
 ### Run an example
 
-Each example in the `examples/` directory contains a complete server and client
-in a single `main.go`. Start the server, then run the client with the printed
-key and port.
+Each directory under [examples/](examples/) contains a complete server and
+client in a single `main.go`. Start the server, then run the client using the
+key, secret, and port it prints.
 
 ```bash
-cd examples/weather
+# Terminal 1 — start the server
+go run examples/weather/main.go server
 
-# Terminal 1 — start server
-go run . server
-
-# Terminal 2 — query weather (use the key, secret, and port from the server output)
-go run . client <key_id> <key_secret_hex> <hush_port> London
+# Terminal 2 — query weather
+go run examples/weather/main.go client <key_id> <key_secret_hex> <hush_port> London
 ```
 
 ### Minimal API (without examples)
@@ -391,41 +389,20 @@ url := builder.BuildURL(tok.ID, "track-abc")
 
 ## Examples
 
-Complete, runnable examples live in the [examples/](examples/) directory.
-Each is a single `main.go` with both server and client.
+| Example | Description | Run it |
+|---------|-------------|--------|
+| [Weather](examples/weather/) | Calls [wttr.in](https://wttr.in) through Hush. External HTTP from a handler. | `go run examples/weather/main.go server` → `client <key> <secret> <port> London` |
+| [CRUD Notes](examples/crud/) | In-memory notes — create, list, get, update, delete. Multiple opcodes. | `go run examples/crud/main.go server` → `client <key> <secret> <port>` |
+| [Chat](examples/chat/) | Real-time chat room using the [event hub](server/stream.go). Pub/sub streaming. | `go run examples/chat/main.go server` → `client <key> <secret> <port> Alice` |
 
-### [Weather](examples/weather/)
-
-Proxies [wttr.in](https://wttr.in) (a free, no-auth weather API) through
-Hush. Demonstrates calling an external HTTP API from a Hush handler.
-
-```bash
-cd examples/weather
-go run . server          # prints key, secret, and port
-go run . client <key> <secret> <port> London
-```
-
-### [CRUD Notes](examples/crud/)
-
-An in-memory notes app with Create, List, Get, Update, and Delete operations.
-Shows multiple opcodes, error handling, and request-response patterns.
+All three follow the same pattern:
 
 ```bash
-cd examples/crud
-go run . server
-go run . client <key> <secret> <port>
-```
+# Terminal 1 — start the server
+go run examples/weather/main.go server
 
-### [Chat](examples/chat/)
-
-A real-time chat room using Hush's built-in event streaming hub. Clients
-send messages and (in a full implementation) subscribe to receive them
-via a long-lived stream.
-
-```bash
-cd examples/chat
-go run . server
-go run . client <key> <secret> <port> <nickname>
+# Terminal 2 — use the key, secret, and port it prints
+go run examples/weather/main.go client <key_id> <key_secret_hex> <hush_port> London
 ```
 
 ---

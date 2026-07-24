@@ -37,9 +37,8 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
 go build ./examples/...
 
 # Run a specific example
-cd examples/weather
-go run . server
-go run . client <key> <secret> <port> London
+go run examples/weather/main.go server
+go run examples/weather/main.go client <key> <secret> <port> London
 ```
 
 ## PR guidelines
