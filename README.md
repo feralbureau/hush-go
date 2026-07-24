@@ -524,8 +524,16 @@ hush-go/
 └── test-key.pem    TLS key for local testing
 ```
 
+
+---
+
+## Contributing
+
+Contributions are welcome. Before opening a pull request, please read the [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
