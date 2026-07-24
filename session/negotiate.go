@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/quic-go/quic-go"
 )
 
 // APIKey represents a pre-shared API key used for authentication.
@@ -17,13 +16,22 @@ type APIKey struct {
 }
 
 // NegotiateClient performs the client side of the session handshake over a QUIC stream.
-func NegotiateClient(ctx context.Context, stream quic.Stream, key *APIKey, clientPriv *ecdh.PrivateKey) (*Session, error) {
+// If key is nil, performs an anonymous handshake (no API key).
+func NegotiateClient(ctx context.Context, stream io.ReadWriter, key *APIKey, clientPriv *ecdh.PrivateKey) (*Session, error) {
 	clientPub := clientPriv.PublicKey().Bytes()
 
-	buf := make([]byte, 2+len(key.ID)+PubKeySize)
-	binary.BigEndian.PutUint16(buf[:2], uint16(len(key.ID)))
-	copy(buf[2:], key.ID)
-	copy(buf[2+len(key.ID):], clientPub)
+	var buf []byte
+	if key == nil || key.ID == "" {
+		// Anonymous: send key_len=0 + pubkey only
+		buf = make([]byte, 2+PubKeySize)
+		binary.BigEndian.PutUint16(buf[:2], 0)
+		copy(buf[2:], clientPub)
+	} else {
+		buf = make([]byte, 2+len(key.ID)+PubKeySize)
+		binary.BigEndian.PutUint16(buf[:2], uint16(len(key.ID)))
+		copy(buf[2:], key.ID)
+		copy(buf[2+len(key.ID):], clientPub)
+	}
 
 	if _, err := stream.Write(buf); err != nil {
 		return nil, fmt.Errorf("negotiate: send init: %w", err)
@@ -47,11 +55,22 @@ func NegotiateClient(ctx context.Context, stream quic.Stream, key *APIKey, clien
 		return nil, fmt.Errorf("negotiate: shared secret: %w", err)
 	}
 
-	sessionKey, err := DeriveSessionKey(shared, key.Secret)
+	var secret []byte
+	if key == nil || key.ID == "" {
+		secret = []byte("hush-anonymous")
+	} else {
+		secret = key.Secret
+	}
+
+	sessionKey, err := DeriveSessionKey(shared, secret)
 	if err != nil {
 		return nil, fmt.Errorf("negotiate: derive key: %w", err)
 	}
 
+	if key == nil || key.ID == "" {
+		sess := NewSession(sessionID, "", sessionKey)
+		return sess, nil
+	}
 	sess := NewSession(sessionID, key.ID, sessionKey)
 	return sess, nil
 }
@@ -67,14 +86,46 @@ type MapKeyStore map[string][]byte
 func (m MapKeyStore) Get(id string) []byte { return m[id] }
 
 // NegotiateServer performs the server side of the session handshake over a QUIC stream.
-func NegotiateServer(ctx context.Context, stream quic.Stream, serverPriv *ecdh.PrivateKey, keyStore APIKeyStore, nextSessionID func() uint64) (*Session, error) {
+func NegotiateServer(ctx context.Context, stream io.ReadWriter, serverPriv *ecdh.PrivateKey, keyStore APIKeyStore, nextSessionID func() uint64) (*Session, error) {
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(stream, header); err != nil {
 		return nil, fmt.Errorf("negotiate: read header: %w", err)
 	}
 	keyLen := binary.BigEndian.Uint16(header)
 	if keyLen == 0 {
-		return nil, fmt.Errorf("negotiate: empty api key id")
+		// Anonymous session — derive key from ECDH only (no API secret)
+		clientPubKey := make([]byte, PubKeySize)
+		if _, err := io.ReadFull(stream, clientPubKey); err != nil {
+			return nil, fmt.Errorf("negotiate: read client pubkey: %w", err)
+		}
+
+		clientPub, err := ecdh.X25519().NewPublicKey(clientPubKey)
+		if err != nil {
+			return nil, fmt.Errorf("negotiate: invalid client pubkey: %w", err)
+		}
+
+		serverPub := serverPriv.PublicKey().Bytes()
+		sessionID := nextSessionID()
+
+		shared, err := SharedSecret(serverPriv, clientPub)
+		if err != nil {
+			return nil, fmt.Errorf("negotiate: shared secret: %w", err)
+		}
+
+		sessionKey, err := DeriveSessionKey(shared, []byte("hush-anonymous"))
+		if err != nil {
+			return nil, fmt.Errorf("negotiate: derive key: %w", err)
+		}
+
+		resp := make([]byte, PubKeySize+8)
+		copy(resp[:PubKeySize], serverPub)
+		binary.BigEndian.PutUint64(resp[PubKeySize:], sessionID)
+
+		if _, err := stream.Write(resp); err != nil {
+			return nil, fmt.Errorf("negotiate: send response: %w", err)
+		}
+
+		return NewSession(sessionID, "", sessionKey), nil
 	}
 	if keyLen > 256 {
 		return nil, fmt.Errorf("negotiate: api key id too long (%d bytes, max 256)", keyLen)

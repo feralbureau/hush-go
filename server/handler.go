@@ -58,6 +58,7 @@ type ctxKey string
 const (
 	ctxSessionID ctxKey = "session_id"
 	ctxAPIKeyID  ctxKey = "api_key_id"
+	ctxRemoteAddr ctxKey = "remote_addr"
 )
 
 // SessionIDFromContext extracts the session ID from the context.
@@ -73,6 +74,16 @@ func SessionIDFromContext(ctx context.Context) (uint64, bool) {
 // APIKeyIDFromContext extracts the API key ID from the context.
 func APIKeyIDFromContext(ctx context.Context) (string, bool) {
 	v := ctx.Value(ctxAPIKeyID)
+	if v == nil {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
+}
+
+// RemoteAddrFromContext extracts the remote address from the context.
+func RemoteAddrFromContext(ctx context.Context) (string, bool) {
+	v := ctx.Value(ctxRemoteAddr)
 	if v == nil {
 		return "", false
 	}

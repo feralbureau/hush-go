@@ -243,6 +243,156 @@ func (s *Server) ListenAndServeOnConn(ctx context.Context, conn net.PacketConn) 
 	}
 }
 
+// ListenAndServeTCP listens on addr over TLS-over-TCP and serves Hush connections.
+// Use this behind Cloudflare (free tier) or any TCP-only load balancer.
+//
+// Each TCP connection handles one session. Multiple requests can be sent
+// sequentially over the same connection.
+//
+//   go srv.ListenAndServeTCP(ctx, ":8443")
+func (s *Server) ListenAndServeTCP(ctx context.Context, addr string) error {
+	if s.tlsConf == nil {
+		return fmt.Errorf("server: TLS config required for TCP")
+	}
+
+	listener, err := transport.ListenTCP(addr, s.tlsConf)
+	if err != nil {
+		return fmt.Errorf("server: listen tcp: %w", err)
+	}
+	defer listener.Close()
+
+	s.logf(LevelInfo, "listening TCP on %s (ALPN: %s)", addr, transport.ALPN)
+
+	go s.gcLoop(ctx)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			s.logf(LevelWarn, "accept tcp: %v", err)
+			continue
+		}
+
+		go s.handleTCPConnection(ctx, conn)
+	}
+}
+
+func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		conn.Close()
+		return
+	}
+
+	// TCP handshake — negotiate session directly on the TLS connection
+	// (no separate stream accept needed, the connection IS the stream)
+	sess, err := session.NegotiateServer(
+		ctx,
+		tlsConn,
+		s.serverPriv,
+		s.keyStore,
+		func() uint64 { return s.nextID.Add(1) },
+	)
+	if err != nil {
+		s.logf(LevelWarn, "session[?] tcp negotiate error: %v (remote=%s)", err, tlsConn.RemoteAddr())
+		tlsConn.Close()
+		return
+	}
+
+	s.sessions.Set(sess)
+	defer s.sessions.Delete(sess.ID)
+
+	s.logf(LevelInfo, "session[%d] tcp established key=%s remote=%s", sess.ID, sess.APIKeyID, tlsConn.RemoteAddr())
+
+	remoteAddr := tlsConn.RemoteAddr().String()
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	defer streamCancel()
+
+	for {
+		select {
+		case <-streamCtx.Done():
+			return
+		default:
+		}
+
+		// Check session expiry
+		if s.sessions.IsExpired(sess) || s.sessions.IsIdleDead(sess) {
+			frame.WriteResponse(tlsConn, sess.Key, 0, &frame.Response{
+				Status: frame.StatusSessionExpired,
+			})
+			tlsConn.Close()
+			return
+		}
+
+		sess.Touch()
+
+		req, seq, err := frame.ReadRequest(tlsConn, sess.Key)
+		if err != nil {
+			// EOF or read error = client disconnected
+			return
+		}
+
+		// Build context with metadata
+		ctx = context.WithValue(ctx, ctxSessionID, sess.ID)
+		ctx = context.WithValue(ctx, ctxAPIKeyID, sess.APIKeyID)
+		if remoteAddr != "" {
+			ctx = context.WithValue(ctx, ctxRemoteAddr, remoteAddr)
+		}
+
+		s.mu.RLock()
+		handler, ok := s.handlers[req.Opcode]
+		s.mu.RUnlock()
+
+		if !ok {
+			frame.WriteResponse(tlsConn, sess.Key, seq, &frame.Response{
+				Status: frame.StatusNotFound,
+				Payload: tlv.NewMap().
+					Set("opcode", tlv.Uint16(req.Opcode)),
+			})
+			continue
+		}
+
+		srvReq := &Request{
+			Request:   req,
+			SessionID: sess.ID,
+			APIKeyID:  sess.APIKeyID,
+		}
+
+		// Streaming handlers not supported over TCP (single stream)
+		if _, ok := handler.(StreamHandler); ok {
+			frame.WriteResponse(tlsConn, sess.Key, seq, &frame.Response{
+				Status: frame.StatusBadRequest,
+				Payload: tlv.NewMap().
+					Set("error", tlv.String("streaming not supported over TCP")),
+			})
+			continue
+		}
+
+		start := time.Now()
+		resp, err := handler.HandleHush(ctx, srvReq)
+		elapsed := time.Since(start)
+
+		if err != nil {
+			s.logf(LevelError, "session[%d] opcode=0x%04x handler error (%s): %v", sess.ID, req.Opcode, elapsed, err)
+			frame.WriteResponse(tlsConn, sess.Key, seq, &frame.Response{
+				Status: frame.StatusInternalError,
+				Payload: tlv.NewMap().
+					Set("error", tlv.String("internal error")),
+			})
+			continue
+		}
+
+		s.logf(LevelInfo, "session[%d] opcode=0x%04x status=%d elapsed=%s", sess.ID, req.Opcode, resp.Status, elapsed)
+
+		if err := frame.WriteResponse(tlsConn, sess.Key, seq, resp); err != nil {
+			s.logf(LevelError, "session[%d] write response: %v", sess.ID, err)
+			return
+		}
+	}
+}
+
 func (s *Server) gcLoop(ctx context.Context) {
 	interval := s.sessionCfg.GCInterval
 	ticker := time.NewTicker(interval)
@@ -288,11 +438,11 @@ func (s *Server) handleConnection(ctx context.Context, conn quic.Connection) {
 		if err != nil {
 			return
 		}
-		go s.handleStream(ctx, sess, stream)
+		go s.handleStream(ctx, sess, stream, conn.RemoteAddr().String())
 	}
 }
 
-func (s *Server) handleStream(ctx context.Context, sess *session.Session, stream quic.Stream) {
+func (s *Server) handleStream(ctx context.Context, sess *session.Session, stream quic.Stream, remoteAddr string) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
@@ -345,6 +495,9 @@ func (s *Server) handleStream(ctx context.Context, sess *session.Session, stream
 
 	ctx = context.WithValue(ctx, ctxSessionID, sess.ID)
 	ctx = context.WithValue(ctx, ctxAPIKeyID, sess.APIKeyID)
+	if remoteAddr != "" {
+		ctx = context.WithValue(ctx, ctxRemoteAddr, remoteAddr)
+	}
 
 	srvReq := &Request{
 		Request:   req,

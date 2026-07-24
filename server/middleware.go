@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -94,17 +95,79 @@ func ContextMiddleware(key, val any) Middleware {
 	}
 }
 
-// RateLimitMiddleware drops requests that exceed limit per window.
+// RateLimitMiddleware drops requests that exceed the given per-key limit.
+// keyFn extracts the rate-limit key from the request.
 //
-//   limiter := NewSlidingWindowLimiter(100, time.Second)
-//   server.Use(RateLimitMiddleware(limiter))
-func RateLimitMiddleware(limiter interface {
-	Allow() bool
-}) Middleware {
+//   limiter := NewSlidingWindowLimiter(100, time.Minute)
+//   server.Use(RateLimitMiddleware(limiter, func(req *Request) string {
+//       return "session:" + fmt.Sprint(req.SessionID)
+//   }))
+func RateLimitMiddleware(limiter *SlidingWindowLimiter, keyFn func(*Request) string) Middleware {
 	return func(next Handler) Handler {
 		return HandlerFunc(func(ctx context.Context, req *Request) (*frame.Response, error) {
-			if !limiter.Allow() {
+			if !limiter.Allow(keyFn(req)) {
 				return ErrorResponse(frame.StatusRateLimited, "rate limit exceeded"), nil
+			}
+			return next.HandleHush(ctx, req)
+		})
+	}
+}
+
+// RateLimitBySession limits requests per session ID.
+//
+//   limiter := NewSlidingWindowLimiter(100, time.Minute)
+//   server.Use(RateLimitBySession(limiter))
+func RateLimitBySession(limiter *SlidingWindowLimiter) Middleware {
+	return RateLimitMiddleware(limiter, func(req *Request) string {
+		return "session:" + fmt.Sprint(req.SessionID)
+	})
+}
+
+// RateLimitByAPIKey limits requests per API key ID.
+// For anonymous sessions, uses "anonymous" as the key.
+//
+//   limiter := NewSlidingWindowLimiter(1000, time.Minute)
+//   server.Use(RateLimitByAPIKey(limiter))
+func RateLimitByAPIKey(limiter *SlidingWindowLimiter) Middleware {
+	return RateLimitMiddleware(limiter, func(req *Request) string {
+		if req.APIKeyID == "" {
+			return "key:anonymous"
+		}
+		return "key:" + req.APIKeyID
+	})
+}
+
+// RateLimitByRemoteAddr limits requests per remote IP address.
+// Requires RemoteAddr in context (set automatically by Server).
+func RateLimitByRemoteAddr(limiter *SlidingWindowLimiter) Middleware {
+	return func(next Handler) Handler {
+		return HandlerFunc(func(ctx context.Context, req *Request) (*frame.Response, error) {
+			addr, _ := RemoteAddrFromContext(ctx)
+			if addr == "" {
+				addr = "unknown"
+			}
+			if !limiter.Allow("ip:" + addr) {
+				return ErrorResponse(frame.StatusRateLimited, "rate limit exceeded"), nil
+			}
+			return next.HandleHush(ctx, req)
+		})
+	}
+}
+
+// MultiRateLimitMiddleware checks multiple limiters in sequence.
+//
+//   server.Use(MultiRateLimitMiddleware(
+//       NewSlidingWindowLimiter(100, time.Second),
+//       NewSlidingWindowLimiter(3000, time.Minute),
+//   ))
+func MultiRateLimitMiddleware(limiters ...*SlidingWindowLimiter) Middleware {
+	return func(next Handler) Handler {
+		return HandlerFunc(func(ctx context.Context, req *Request) (*frame.Response, error) {
+			key := "session:" + fmt.Sprint(req.SessionID)
+			for _, l := range limiters {
+				if !l.Allow(key) {
+					return ErrorResponse(frame.StatusRateLimited, "rate limit exceeded"), nil
+				}
 			}
 			return next.HandleHush(ctx, req)
 		})
