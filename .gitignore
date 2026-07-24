@@ -33,3 +33,8 @@ Thumbs.db
 
 # Plan file
 hush-plan.md
+
+# Examples binaries
+/chat
+/crud
+/weather

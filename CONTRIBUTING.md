@@ -11,6 +11,7 @@ Hush is a **protocol framework**, not an application server. Good contributions:
 - **Protocol extensions** — only if they're optional and don't bloat the core
 - **Tests** — edge cases, fuzzing, interoperability
 - **Documentation** — clearer examples, better explanations, fixing gaps
+- **Examples** — new complete examples in [`examples/`](examples/) are welcome
 
 What doesn't fit:
 
@@ -22,10 +23,30 @@ What doesn't fit:
 
 If you're adding a feature or changing behaviour, open an issue first. Saves you writing code that won't merge.
 
+## Running examples
+
+All examples are in [`examples/`](examples/). Test your changes against them:
+
+```bash
+# Generate TLS certs first (one time)
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+  -keyout test-key.pem -out test-cert.pem -days 3650 -nodes \
+  -subj "/CN=hush.test" -addext "subjectAltName=DNS:hush.test,IP:127.0.0.1"
+
+# Build all examples
+go build ./examples/...
+
+# Run a specific example
+cd examples/weather
+go run . server
+go run . client <key> <secret> <port> London
+```
+
 ## PR guidelines
 
 - One change per PR. Small diffs get reviewed faster.
 - All existing tests must pass. Add tests for new code.
+- Run the examples to verify nothing is broken.
 - Follow the existing style. There's no formatter config — just match the surrounding code.
 - No vendored dependencies. Hush has two: `quic-go` and `golang.org/x/crypto`. Think hard before adding a third.
 - Keep the diff minimal. Don't reformat unrelated code.
@@ -44,4 +65,4 @@ go test -race -count=1 ./...
 
 ## Code of conduct
 
-Don't be a jerk. That's it.
+Don't be a jerk.

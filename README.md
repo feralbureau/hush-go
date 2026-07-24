@@ -33,15 +33,36 @@ You can disable any of these protections when you don't need them (see
 ### Prerequisites
 
 - Go 1.26+
-- A TLS certificate for local testing:
+- Clone the repo and generate a test TLS certificate:
 
 ```bash
+git clone https://github.com/feralbureau/hush-go.git
+cd hush-go
+
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
   -keyout test-key.pem -out test-cert.pem -days 3650 -nodes \
   -subj "/CN=hush.test" -addext "subjectAltName=DNS:hush.test,IP:127.0.0.1"
 ```
 
-### Minimal server
+### Run an example
+
+Each example in the `examples/` directory contains a complete server and client
+in a single `main.go`. Start the server, then run the client with the printed
+key and port.
+
+```bash
+cd examples/weather
+
+# Terminal 1 — start server
+go run . server
+
+# Terminal 2 — query weather (use the key, secret, and port from the server output)
+go run . client <key_id> <key_secret_hex> <hush_port> London
+```
+
+### Minimal API (without examples)
+
+If you just want to write a server from scratch:
 
 ```go
 package main
@@ -50,7 +71,7 @@ import (
     "context"
     "crypto/tls"
     "log"
-    "os"
+    "net"
     "os/signal"
 
     "github.com/feralbureau/hush-go/frame"
@@ -66,10 +87,7 @@ func main() {
     cert, _ := tls.LoadX509KeyPair("test-cert.pem", "test-key.pem")
     tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}}
 
-    srv, _ := server.NewServer(keyStore,
-        server.WithTLSConfig(tlsCfg),
-        server.WithLogger(log.Default()),
-    )
+    srv, _ := server.NewServer(keyStore, server.WithTLSConfig(tlsCfg))
 
     srv.HandleFunc(0x0001, func(ctx context.Context, r *server.Request) (*frame.Response, error) {
         name, _ := r.Payload.GetString("name")
@@ -77,12 +95,17 @@ func main() {
             Set("greeting", tlv.String("hello, "+name))), nil
     })
 
+    // Bind to a random port so the OS chooses one
+    addr, _ := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+    conn, _ := net.ListenUDP("udp", addr)
+    log.Printf("listening on port %d", conn.LocalAddr().(*net.UDPAddr).Port)
+
     ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
-    log.Fatal(srv.ListenAndServe(ctx, ":443"))
+    srv.ListenAndServeOnConn(ctx, conn)
 }
 ```
 
-### Minimal client
+And the matching client:
 
 ```go
 package main
@@ -100,9 +123,9 @@ import (
 
 func main() {
     key := &session.APIKey{ID: "<id>", Secret: []byte("<secret>")}
-    tlsConf := &tls.Config{InsecureSkipVerify: true}
+    tlsConf := &tls.Config{InsecureSkipVerify: true, ServerName: "hush.test"}
 
-    c, err := client.Dial(context.Background(), "127.0.0.1:443", key,
+    c, err := client.Dial(context.Background(), "127.0.0.1:<port>", key,
         client.WithTLSConfig(tlsConf))
     if err != nil {
         log.Fatal(err)
@@ -111,9 +134,8 @@ func main() {
 
     resp, _ := c.Do(context.Background(), 0x0001,
         tlv.NewMap().Set("name", tlv.String("world")))
-
     greeting, _ := resp.Payload.GetString("greeting")
-    fmt.Println(greeting) // "hello, world"
+    fmt.Println(greeting)
 }
 ```
 
@@ -335,6 +357,75 @@ store.MaxTokenTTL = 30 * time.Minute
 builder := media.NewMediaURLBuilder("https://media.example.com", store)
 url := builder.BuildURL(tok.ID, "track-abc")
 // → "https://media.example.com/media/ab12.../track-abc"
+```
+
+For serving large files (images, audio, HLS streams) over HTTPS, Hush uses
+session-bound media tokens. The QUIC session handles API calls; a companion
+HTTPS server handles media delivery.
+
+```go
+store := media.NewTokenStore(func(sid uint64) bool {
+    _, ok := sessionStore.Get(sid)
+    return ok
+})
+
+// Issue a token bound to a session
+tok, _ := store.Issue(sessionID, "track-abc")
+
+// Validate and extend (for initial access)
+valid := store.Validate(tok.ID)
+
+// Lightweight existence check (for HLS segment proxying)
+exists := store.Exists(tok.ID)
+
+// Absolute TTL (configurable)
+store.MaxTokenTTL = 30 * time.Minute
+
+// Build media URLs
+builder := media.NewMediaURLBuilder("https://media.example.com", store)
+url := builder.BuildURL(tok.ID, "track-abc")
+// → "https://media.example.com/media/ab12.../track-abc"
+```
+
+---
+
+## Examples
+
+Complete, runnable examples live in the [examples/](examples/) directory.
+Each is a single `main.go` with both server and client.
+
+### [Weather](examples/weather/)
+
+Proxies [wttr.in](https://wttr.in) (a free, no-auth weather API) through
+Hush. Demonstrates calling an external HTTP API from a Hush handler.
+
+```bash
+cd examples/weather
+go run . server          # prints key, secret, and port
+go run . client <key> <secret> <port> London
+```
+
+### [CRUD Notes](examples/crud/)
+
+An in-memory notes app with Create, List, Get, Update, and Delete operations.
+Shows multiple opcodes, error handling, and request-response patterns.
+
+```bash
+cd examples/crud
+go run . server
+go run . client <key> <secret> <port>
+```
+
+### [Chat](examples/chat/)
+
+A real-time chat room using Hush's built-in event streaming hub. Clients
+send messages and (in a full implementation) subscribe to receive them
+via a long-lived stream.
+
+```bash
+cd examples/chat
+go run . server
+go run . client <key> <secret> <port> <nickname>
 ```
 
 ---
