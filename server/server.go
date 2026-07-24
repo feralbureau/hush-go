@@ -34,6 +34,9 @@ type Server struct {
 	handlers map[uint16]Handler
 	mu       sync.RWMutex
 	sessions *session.SessionStore
+
+	middlewares      []Middleware
+	streamMiddlewares []StreamMiddleware
 	nextID   atomic.Uint64
 
 	keyStore session.APIKeyStore
@@ -112,6 +115,22 @@ func NewServer(keyStore session.APIKeyStore, opts ...Option) (*Server, error) {
 	return s, nil
 }
 
+// Use adds a Middleware to the server. Middleware is applied to every
+// handler registered *after* the call to Use.
+func (s *Server) Use(mw Middleware) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.middlewares = append(s.middlewares, mw)
+}
+
+// UseStream adds a StreamMiddleware to the server. Applied to every
+// streaming handler registered after this call.
+func (s *Server) UseStream(mw StreamMiddleware) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.streamMiddlewares = append(s.streamMiddlewares, mw)
+}
+
 func (s *Server) logf(level, format string, args ...interface{}) {
 	if s.Logger == nil {
 		return
@@ -121,6 +140,10 @@ func (s *Server) logf(level, format string, args ...interface{}) {
 
 // Handle registers a handler for a given opcode.
 func (s *Server) Handle(opcode uint16, h Handler) {
+	// Wrap through middleware chain (in reverse order so first Use = outer layer)
+	for i := len(s.middlewares) - 1; i >= 0; i-- {
+		h = s.middlewares[i](h)
+	}
 	s.mu.Lock()
 	s.handlers[opcode] = h
 	s.mu.Unlock()
@@ -128,11 +151,20 @@ func (s *Server) Handle(opcode uint16, h Handler) {
 
 // HandleFunc registers a handler function for a given opcode.
 func (s *Server) HandleFunc(opcode uint16, fn HandlerFunc) {
-	s.Handle(opcode, fn)
+	h := Handler(fn)
+	for i := len(s.middlewares) - 1; i >= 0; i-- {
+		h = s.middlewares[i](h)
+	}
+	s.mu.Lock()
+	s.handlers[opcode] = h
+	s.mu.Unlock()
 }
 
 // HandleStream registers a streaming handler for a given opcode.
 func (s *Server) HandleStream(opcode uint16, h StreamHandler) {
+	for i := len(s.streamMiddlewares) - 1; i >= 0; i-- {
+		h = s.streamMiddlewares[i](h)
+	}
 	s.mu.Lock()
 	s.handlers[opcode] = h
 	s.mu.Unlock()
@@ -140,7 +172,13 @@ func (s *Server) HandleStream(opcode uint16, h StreamHandler) {
 
 // HandleStreamFunc registers a streaming handler function.
 func (s *Server) HandleStreamFunc(opcode uint16, fn StreamHandlerFunc) {
-	s.HandleStream(opcode, fn)
+	h := StreamHandler(fn)
+	for i := len(s.streamMiddlewares) - 1; i >= 0; i-- {
+		h = s.streamMiddlewares[i](h)
+	}
+	s.mu.Lock()
+	s.handlers[opcode] = h
+	s.mu.Unlock()
 }
 
 // ListenAndServe listens on addr and serves Hush connections.
