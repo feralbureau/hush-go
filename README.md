@@ -509,6 +509,12 @@ store.MaxTokenTTL = 10 * time.Minute  // default: 2h
 ### Logger
 
 ```go
+// Colored terminal output (stderr)
+srv, _ := server.NewServer(ks,
+    server.WithLogger(server.NewLogger("hush")),
+)
+
+// Standard log package (no colors)
 srv, _ := server.NewServer(ks,
     server.WithLogger(log.New(os.Stdout, "hush: ", log.Ltime|log.Lmsgprefix)),
 )
