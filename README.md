@@ -11,8 +11,7 @@ binary TLV format, and encrypts every frame with per-session AES-256-GCM keys.
 import "github.com/feralbureau/hush-go"
 ```
 
-There is also a [Rust implementation (hush-rs)](https://github.com/feralbureau/hush-rs) —
-same wire format, same crypto, same semantics, fully interoperable.
+There is also a [Rust implementation (hush-rs)](https://github.com/feralbureau/hush-rs) with same wire format, same crypto, same semantics and fully interoperable.
 
 ---
 
