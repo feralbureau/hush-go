@@ -60,7 +60,7 @@ func runServer() {
 
 	srv, err := server.NewServer(ks,
 		server.WithTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}}),
-		server.WithLogger(log.New(os.Stdout, "weather: ", log.Ltime|log.Lmsgprefix)),
+		server.WithLogger(server.NewLogger("weather")),
 	)
 	if err != nil {
 		log.Fatalf("create server: %v", err)
