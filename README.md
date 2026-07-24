@@ -1,13 +1,13 @@
 # Hush 🔇
 
-**Stealth-first API protocol for Go.**
+**Stealth-first API protocol for Go — QUIC and TCP.**
 
 Hush is a network protocol framework that makes your API invisible to standard
 tooling. No HTTP endpoints to discover, no readable request structure, no replay
-attacks. It runs over QUIC with a custom ALPN, encodes payloads in a compact
-binary TLV format, and encrypts every frame with per-session AES-256-GCM keys.
-
-```
+tooling. No HTTP endpoints to discover, no readable request structure, no replay
+attacks. Supports both **QUIC** (UDP, fast) and **TLS-over-TCP** (compatible with
+Cloudflare and standard load balancers), encodes payloads in a compact binary
+TLV format, and encrypts every frame with per-session AES-256-GCM keys.
 import "github.com/feralbureau/hush-go"
 ```
 
@@ -102,6 +102,12 @@ func main() {
 
     ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt)
     srv.ListenAndServeOnConn(ctx, conn)
+
+Or over TCP (behind Cloudflare):
+
+```go
+srv.ListenAndServeTCP(ctx, ":8443")
+```
 }
 ```
 
@@ -145,28 +151,34 @@ func main() {
 
 ```
 hush-go/
-├── transport/   QUIC dial/listen with configurable ALPN
+├── transport/   QUIC (hush://) and TCP (tcps://) dial/listen with ALPN config
 ├── session/     X25519 key exchange, AES-256-GCM, session store
 ├── frame/       Length-prefixed encrypted/plaintext wire frames
 ├── tlv/         Binary TLV serialization (string, ints, floats, maps, arrays)
 ├── client/      High-level client (connect, send, receive)
-├── server/      High-level server (TLS, sessions, handler dispatch, streaming)
+├── server/      High-level server (TLS, sessions, handler dispatch, streaming,
+│   │               middleware, rate limiting)
+│   ├── middleware.go  Composable middleware chain
+│   ├── ratelimit.go   Sliding-window rate limiters
+│   └── stream.go     Built-in event pub/sub hub
 │   └── stream.go   Built-in event pub/sub hub
 └── media/       Session-bound media tokens for HTTP media delivery
 ```
 
-### `transport` — QUIC connectivity
+### `transport` — QUIC and TCP connectivity
 
 ```go
 // Override the ALPN for the protocol (default: "hush/1")
 transport.DefaultALPN = "my-app/1"
 
 conn, _ := transport.Dial(ctx, "127.0.0.1:443", tlsCfg)
+tcpConn, _ := transport.DialTCP(ctx, "127.0.0.1:8443", tlsCfg)
+listener, _ := transport.ListenTCP(":8443", tlsCfg)
 listener, _ := transport.Listen(":443", tlsCfg)
 ```
 
 The TLS config passed to Dial/Listen acts as the source for certificates and
-ALPN. If `NextProtos` is empty, the transport uses `DefaultALPN`.
+TCP helpers use the same TLS config and ALPN, making it easy to switch.
 
 ### `session` — Key exchange, crypto, configuration
 
@@ -287,6 +299,25 @@ count, _ := payload.GetUint64("count")
 nested, _ := payload.GetMap("nested")
 ```
 
+### `session` — Anonymous handshake
+
+The handshake supports **anonymous sessions** by sending `key_len=0`.
+The session key is derived from X25519 ECDH alone (no API secret).
+This allows unauthenticated bootstrap flows (e.g., login) over an encrypted channel.
+
+```go
+// Client: nil or empty ID = anonymous
+client, _ := client.Dial(ctx, "127.0.0.1:443", &session.APIKey{ID: ""})
+```
+
+```go
+// Server: accepts both anonymous and authenticated
+srv.HandleFunc(0x0001, func(ctx context.Context, req *Request) (*frame.Response, error) {
+    // Login handler — accessible without API key
+    return server.NewResponse(tlv.NewMap().Set("status", tlv.String("ok"))), nil
+})
+```
+
 ### `client` — High-level client
 
 ```go
@@ -328,6 +359,24 @@ srv.ListenAndServeOnConn(ctx, conn)
 | `WithLogger(l)` | Structured logger (nil = silent) |
 | `WithSessionConfig(cfg)` | Session timeouts |
 | `WithMediaSupport(baseURL)` | Media token store |
+
+### `server` — Middleware and rate limiting
+
+```go
+limiter := server.NewSlidingWindowLimiter(100, time.Minute)
+srv.Use(server.RateLimitBySession(limiter))
+srv.Use(server.LoggingMiddleware(srv))
+```
+
+Built-in middleware:
+- `LoggingMiddleware` — logs opcode, status, duration
+- `RecoveryMiddleware` — catches panics in handlers
+- `RateLimitBySession` — per-session sliding window
+- `RateLimitByAPIKey` — per-key sliding window
+- `RateLimitByRemoteAddr` — per-IP sliding window
+- `MultiRateLimitMiddleware` — check multiple limiters
+- `ContextMiddleware` — inject values into context
+- `RequireAPIKeyID` — restrict to specific API keys
 
 ### `media` — Media token management
 
@@ -589,7 +638,7 @@ Session key   = HKDF-SHA256(ikm=api_key_secret, salt=shared_secret, info="hush-v
 
 ```
 hush-go/
-├── transport/   QUIC dial/listen, configurable ALPN
+├── transport/   QUIC (hush://) and TCP (tcps://) dial/listen
 ├── session/     X25519 key exchange, AES-256-GCM, session store, config
 ├── frame/       Length-prefixed encrypted/plaintext wire frames
 ├── tlv/         Binary TLV encode/decode, all types
