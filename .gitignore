@@ -1,0 +1,35 @@
+# ── Compiled binaries (anywhere in tree) ──
+*.test
+*.out
+*.exe
+*.test.bin
+/integration
+/scli
+/hushd
+/demo
+/demoapi
+/democlient
+
+# ── TLS test artifacts ──
+*.pem
+
+# ── Runtime state ──
+hush_users.json
+session_store.json
+*.bak
+*.swp
+*.swo
+
+# ── Demo downloaded files ──
+downloaded_*
+
+# ── IDE ──
+.idea/
+.vscode/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# Plan file
+hush-plan.md
