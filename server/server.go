@@ -360,13 +360,12 @@ func (s *Server) handleTCPConnection(ctx context.Context, conn net.Conn) {
 			APIKeyID:  sess.APIKeyID,
 		}
 
-		// Streaming handlers not supported over TCP (single stream)
-		if _, ok := handler.(StreamHandler); ok {
-			frame.WriteResponse(tlsConn, sess.Key, seq, &frame.Response{
-				Status: frame.StatusBadRequest,
-				Payload: tlv.NewMap().
-					Set("error", tlv.String("streaming not supported over TCP")),
-			})
+		// Streaming handlers over TCP: the TLS connection IS the stream.
+		// Sequential — the handler runs to completion before the next request.
+		if streamHandler, ok := handler.(StreamHandler); ok {
+			if err := streamHandler.HandleHushStream(streamCtx, srvReq, tlsConn, sess.Key); err != nil {
+				s.logf(LevelError, "session[%d] opcode=0x%04x tcp stream error: %v", sess.ID, req.Opcode, err)
+			}
 			continue
 		}
 
