@@ -1,6 +1,6 @@
 # Hush 🔇
 
-**Stealth-first API protocol for Go — QUIC and TCP.**
+**Stealth-first API protocol for Go.**
 
 Hush is a network protocol framework that makes your API invisible to standard
 tooling. No HTTP endpoints to discover, no readable request structure, no replay
@@ -8,6 +8,7 @@ tooling. No HTTP endpoints to discover, no readable request structure, no replay
 attacks. Supports both **QUIC** (UDP, fast) and **TLS-over-TCP** (compatible with
 Cloudflare and standard load balancers), encodes payloads in a compact binary
 TLV format, and encrypts every frame with per-session AES-256-GCM keys.
+```
 import "github.com/feralbureau/hush-go"
 ```
 
