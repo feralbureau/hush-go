@@ -39,7 +39,7 @@ func (cw *colorWriter) Write(p []byte) (int, error) {
 		tagPart = fmt.Sprintf(" [%s%s%s]", dim, cw.tag, reset)
 	}
 
-	fmt.Fprintf(cw.w, "%s%s%s%s %s[%s%s%s]%s %s",
+	fmt.Fprintf(cw.w, "%s%s%s%s %s[%s]%s %s",
 		dim, ts, reset,
 		tagPart,
 		lc, level, reset,
